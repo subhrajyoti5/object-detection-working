@@ -5,6 +5,7 @@
 ## Project-directory - https://gitlab.com/duder1966/youtube-projects/-/tree/master/OpenCV/camruler
 
 # builtins
+from error_calculator import draw_error_box, draw_2d_error_box, calculate_2d_error
 import os,sys,time,traceback
 from math import hypot
 
@@ -16,6 +17,19 @@ import cv2
 # local clayton libs
 import frame_capture
 import frame_draw
+
+# Add this function near the top of your file (after imports)
+def debug_print(*args):
+    """Helper function to print debug info with timestamps"""
+    print(f"[DEBUG {time.strftime('%H:%M:%S')}]", *args)
+
+# Add this function after debug_print
+def show_error_message(frame, message):
+    """Display an error message on the frame"""
+    h, w = frame.shape[:2]
+    x, y = 10, h - 30
+    cv2.rectangle(frame, (x, y-20), (x+len(message)*8, y+10), (0, 0, 100), -1)
+    cv2.putText(frame, message, (x+5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
 #-------------------------------
 # default settings
@@ -37,6 +51,10 @@ auto_blur = 5
 # normalization mouse events
 norm_alpha = 0
 norm_beta = 255
+
+# Expected measurement values for error calculation 
+expected_length = 145.00   # bottle cap - 51.0  # Expected reference length in mm
+expected_width = 80.00   # bottle cap - 51.0   # Expected reference width in mm
 
 #-------------------------------
 # read config file
@@ -559,7 +577,21 @@ while 1:
             draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
             draw.add_text(frame0,f'Area: {carea:.2f}',x3,y2+8,center=True,top=True,color='red')
             if alen:
-                draw.add_text(frame0,f'Avg: {alen:.2f}',x3,y2+34,center=True,top=True,color='green')
+                draw.add_text(frame0, f'Avg: {alen:.2f}', x3, y2+34, center=True, top=True, color='green')
+                
+                # Debug info
+                debug_print(f"AUTO MODE: Ready to draw error box with {expected_length}×{expected_width} vs {xlen}×{ylen}")
+                
+                try:
+                    # Draw error analysis box
+                    draw_2d_error_box(frame0, int(x1), int(y2)+60, 
+                                     expected_length, xlen, 
+                                     expected_width, ylen,
+                                     "Reference", "Measured")
+                except Exception as e:
+                    debug_print(f"Error displaying measurement analysis: {e}")
+                    traceback.print_exc()
+
             if x1 < width-x2:
                 draw.add_text(frame0,f'{ylen:.2f}',x2+4,(y1+y2)/2,middle=True,color='red')
             else:
@@ -625,6 +657,11 @@ while 1:
             draw.add_text(frame0,f'Area: {carea:.2f}',x3,y3+8,center=True,top=True,color='red')
             if alen:
                 draw.add_text(frame0,f'Avg: {alen:.2f}',x3,y3+34,center=True,top=True,color='green')           
+                if key_flags['lock']:
+                    draw_2d_error_box(frame0, 10, y3+50, 
+                                     expected_length, xlen, 
+                                     expected_width, ylen,
+                                     "Reference", "Measured")
             if x2 <= x1:
                 draw.add_text(frame0,f'{ylen:.2f}',x1+4,(y1+y2)/2,middle=True,color='red')
                 draw.add_text(frame0,f'{llen:.2f}',x2-4,y2-4,right=True,color='green')
