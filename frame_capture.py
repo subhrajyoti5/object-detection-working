@@ -40,7 +40,7 @@ class Camera_Thread:
     # ------------------------------
 
     # camera setup
-    camera_source = 0
+    camera_source = 2
     camera_width = 640
     camera_height = 480
     camera_frame_rate = 30

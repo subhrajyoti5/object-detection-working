@@ -31,12 +31,42 @@ def show_error_message(frame, message):
     cv2.rectangle(frame, (x, y-20), (x+len(message)*8, y+10), (0, 0, 100), -1)
     cv2.putText(frame, message, (x+5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
+# Add this function after show_error_message
+def is_circle(contour, threshold=0.7):
+    """
+    Check if a contour is approximately circular.
+    Args:
+        contour: OpenCV contour
+        threshold: Circularity threshold (0-1), higher is more strict
+    Returns:
+        bool: True if contour is circular
+        float: Estimated radius
+        tuple: Center point (x, y)
+    """
+    # Calculate area and perimeter
+    area = cv2.contourArea(contour)
+    perimeter = cv2.arcLength(contour, True)
+    
+    # Calculate circularity (4*pi*area/perimeter^2)
+    # Perfect circle has circularity = 1
+    if perimeter == 0:
+        return False, 0, (0, 0)
+    circularity = 4 * np.pi * area / (perimeter * perimeter)
+    
+    # Get center and radius using minEnclosingCircle
+    center, radius = cv2.minEnclosingCircle(contour)
+    center = (int(center[0]), int(center[1]))
+    radius = int(radius)
+    
+    # Check if contour is circular enough
+    return circularity > threshold, radius, center
+
 #-------------------------------
 # default settings
 #-------------------------------
 
 # camera values
-camera_id = 0
+camera_id = 2
 camera_width = 1920
 camera_height = 1080
 camera_frame_rate = 30
@@ -52,9 +82,9 @@ auto_blur = 5
 norm_alpha = 0
 norm_beta = 255
 
-# Expected measurement values for error calculation 
-expected_length = 145.00   # bottle cap - 51.0  # Expected reference length in mm
-expected_width = 80.00   # bottle cap - 51.0   # Expected reference width in mm
+# Expected measurement values for error calculation
+expected_length = 51.0 # square of 145.00   # bottle cap - 51.0  # Expected reference length in mm
+expected_width = 51.0 # square of 80.00   # bottle cap - 51.0   # Expected reference width in mm
 
 #-------------------------------
 # read config file
@@ -543,7 +573,6 @@ while 1:
     
         # loop over the contours
         for c in contours:
-
             # contour data (from top left)
             x1,y1,w,h = cv2.boundingRect(c)
             x2,y2 = x1+w,y1+h
@@ -554,12 +583,15 @@ while 1:
             
             # if the contour is too small, ignore it
             if percent < auto_percent:
-                    continue
+                continue
 
             # if the contour is too large, ignore it
             elif percent > 60:
-                    continue
+                continue
 
+            # Check if the contour is circular
+            circ_check, radius, center = is_circle(c)
+            
             # convert to center, then distance
             x1c,y1c = conv(x1-(cx),y1-(cy))
             x2c,y2c = conv(x2-(cx),y2-(cy))
@@ -570,32 +602,55 @@ while 1:
                 alen = (xlen+ylen)/2              
             carea = xlen*ylen
 
-            # plot
-            draw.rect(frame0,x1,y1,x2,y2,weight=2,color='red')
-
-            # add dimensions
-            draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
-            draw.add_text(frame0,f'Area: {carea:.2f}',x3,y2+8,center=True,top=True,color='red')
-            if alen:
-                draw.add_text(frame0, f'Avg: {alen:.2f}', x3, y2+34, center=True, top=True, color='green')
+            # If it's a circle
+            if circ_check:
+                # Calculate diameter in measurement units
+                rc = conv(radius, 0)[0]  # Convert radius to real units
+                diameter = rc * 2
                 
-                # Debug info
-                debug_print(f"AUTO MODE: Ready to draw error box with {expected_length}×{expected_width} vs {xlen}×{ylen}")
+                # Draw circle and diameter
+                cv2.circle(frame0, center, radius, (0, 0, 255), 2)
+                cv2.line(frame0, 
+                        (center[0]-radius, center[1]), 
+                        (center[0]+radius, center[1]), 
+                        (0, 255, 0), 1)
                 
-                try:
-                    # Draw error analysis box
-                    draw_2d_error_box(frame0, int(x1), int(y2)+60, 
-                                     expected_length, xlen, 
-                                     expected_width, ylen,
-                                     "Reference", "Measured")
-                except Exception as e:
-                    debug_print(f"Error displaying measurement analysis: {e}")
-                    traceback.print_exc()
+                # Add diameter text
+                draw.add_text(frame0, f'⌀{diameter:.2f}{unit_suffix}', 
+                            center[0]+radius+10, center[1], 
+                            color='red')
+                
+                # Error calculation
+                if expected_length > 0:
+                    try:
+                        draw_2d_error_box(frame0, center[0]-140, center[1]+radius+40, 
+                                        expected_length, diameter, 
+                                        expected_width, diameter,
+                                        "Reference", "Measured")
+                    except Exception as e:
+                        debug_print(f"Circle error display failed: {e}")
 
-            if x1 < width-x2:
-                draw.add_text(frame0,f'{ylen:.2f}',x2+4,(y1+y2)/2,middle=True,color='red')
+            # For non-circular objects
             else:
-                draw.add_text(frame0,f'{ylen:.2f}',x1-4,(y1+y2)/2,middle=True,right=True,color='red')
+                # Original rectangle drawing
+                draw.rect(frame0,x1,y1,x2,y2,weight=2,color='red')
+                draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
+                draw.add_text(frame0,f'Area: {carea:.2f}',x3,y2+8,center=True,top=True,color='red')
+                
+                if alen:
+                    draw.add_text(frame0, f'Avg: {alen:.2f}', x3, y2+34, center=True, top=True, color='green')
+                    try:
+                        draw_2d_error_box(frame0, int(x1), int(y2)+60, 
+                                        expected_length, xlen, 
+                                        expected_width, ylen,
+                                        "Reference", "Measured")
+                    except Exception as e:
+                        debug_print(f"Rect error display failed: {e}")
+
+                if x1 < width-x2:
+                    draw.add_text(frame0,f'{ylen:.2f}',x2+4,(y1+y2)/2,middle=True,color='red')
+                else:
+                    draw.add_text(frame0,f'{ylen:.2f}',x1-4,(y1+y2)/2,middle=True,right=True,color='red')
 
     #-------------------------------
     # dimension mode
@@ -609,7 +664,7 @@ while 1:
         draw.vline(frame0,mouse_raw[0],weight=1,color='green')
         draw.hline(frame0,mouse_raw[1],weight=1,color='green')
        
-        # draw
+        # Manual draw
         if mouse_mark:
 
             # locations
@@ -659,9 +714,9 @@ while 1:
                 draw.add_text(frame0,f'Avg: {alen:.2f}',x3,y3+34,center=True,top=True,color='green')           
                 if key_flags['lock']:
                     draw_2d_error_box(frame0, 10, y3+50, 
-                                     expected_length, xlen, 
-                                     expected_width, ylen,
-                                     "Reference", "Measured")
+                                    expected_length, xlen, 
+                                    expected_width, ylen,
+                                    "Reference", "Measured")
             if x2 <= x1:
                 draw.add_text(frame0,f'{ylen:.2f}',x1+4,(y1+y2)/2,middle=True,color='red')
                 draw.add_text(frame0,f'{llen:.2f}',x2-4,y2-4,right=True,color='green')
@@ -680,8 +735,6 @@ while 1:
         text.append(f'T = THRESHOLD')
         text.append(f'T = GAUSS BLUR')
     text.append(f'C = CONFIG-MODE')
-    
-
 
     # draw top-left text block
     draw.add_text_top_left(frame0,text)
