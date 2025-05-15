@@ -8,6 +8,8 @@
 from error_calculator import draw_error_box, draw_2d_error_box, calculate_2d_error
 import os,sys,time,traceback
 from math import hypot
+# Add error logging FIRST
+import error_logger  # This applies the monkey-patch before anything else
 
 # must be installed using pip
 # python3 -m pip install opencv-python
@@ -438,336 +440,357 @@ def mouse_event(event,x,y,flags,parameters):
 cv2.setMouseCallback(framename,mouse_event)
 
 #-------------------------------
-# main loop
+# main function
 #-------------------------------
 
-# loop
-while 1:
-
-    # get frame
-    frame0 = camera.next(wait=1)
-    if frame0 is None:
-        time.sleep(0.1)
-        continue
-
-    # normalize
-    cv2.normalize(frame0,frame0,norm_alpha,norm_beta,cv2.NORM_MINMAX)
-
-    # rotate 180
-    if key_flags['rotate']:
-        frame0 = cv2.rotate(frame0,cv2.ROTATE_180)
-
-    # start top-left text block
-    text = []
-
-    # camera text
-    fps = camera.current_frame_rate
-    text.append(f'CAMERA: {camera_id} {width}x{height} {fps}FPS')
-
-    # mouse text
-    text.append('')
-    if not mouse_mark:
-        text.append(f'LAST CLICK: NONE')
-    else:
-        text.append(f'LAST CLICK: {mouse_mark} PIXELS')
-    text.append(f'CURRENT XY: {mouse_now} PIXELS')
-
-    #-------------------------------
-    # normalize mode
-    #-------------------------------
-    if key_flags['norms']:
-
-        # print
-        text.append('')
-        text.append(f'NORMILIZE MODE')
-        text.append(f'ALPHA (min): {norm_alpha}')
-        text.append(f'BETA (max): {norm_beta}')
-        
-    #-------------------------------
-    # config mode
-    #-------------------------------
-    if key_flags['config']:
-
-        # quadrant crosshairs
-        draw.crosshairs(frame0,5,weight=2,color='red',invert=True)
-
-        # crosshairs aligned (rotated) to maximum distance 
-        draw.line(frame0,cx,cy, cx+cx, cy+cy,weight=1,color='red')
-        draw.line(frame0,cx,cy, cx+cy, cy-cx,weight=1,color='red')
-        draw.line(frame0,cx,cy,-cx+cx,-cy+cy,weight=1,color='red')
-        draw.line(frame0,cx,cy, cx-cy, cy+cx,weight=1,color='red')
-
-        # mouse cursor lines (parallel to aligned crosshairs)
-        mx,my = mouse_raw
-        draw.line(frame0,mx,my,mx+dm,my+(dm*( cy/cx)),weight=1,color='green')
-        draw.line(frame0,mx,my,mx-dm,my-(dm*( cy/cx)),weight=1,color='green')
-        draw.line(frame0,mx,my,mx+dm,my+(dm*(-cx/cy)),weight=1,color='green')
-        draw.line(frame0,mx,my,mx-dm,my-(dm*(-cx/cy)),weight=1,color='green')
+def main():
+    """
+    Main function for CamRuler application
+    """
+    global camera, width, height, area, cx, cy, dm, frate, draw, mouse_mark
+    global cal_last, norm_alpha, norm_beta, auto_percent, auto_threshold, auto_blur
     
-        # config text data
+    # loop
+    while 1:
+        # get frame
+        frame0 = camera.next(wait=1)
+        if frame0 is None:
+            time.sleep(0.1)
+            continue
+
+        # normalize
+        cv2.normalize(frame0,frame0,norm_alpha,norm_beta,cv2.NORM_MINMAX)
+
+        # rotate 180
+        if key_flags['rotate']:
+            frame0 = cv2.rotate(frame0,cv2.ROTATE_180)
+
+        # start top-left text block
+        text = []
+
+        # camera text
+        fps = camera.current_frame_rate
+        text.append(f'CAMERA: {camera_id} {width}x{height} {fps}FPS')
+
+        # mouse text
         text.append('')
-        text.append(f'CONFIG MODE')
-
-        # start cal
-        if not cal_last:
-            cal_last = cal_base
-            caltext = f'CONFIG: Click on D = {cal_last}'
-
-        # continue cal
-        elif cal_last <= cal_range:
-            if mouse_mark:
-                cal_update(*mouse_mark,cal_last)
-                cal_last += cal_base
-            caltext = f'CONFIG: Click on D = {cal_last}'
-
-        # done
+        if not mouse_mark:
+            text.append(f'LAST CLICK: NONE')
         else:
-            key_flags_clear()
-            cal_last == None
-            with open(calfile,'w') as f:
-                data = list(cal.items())
-                data.sort()
-                for key,value in data:
-                    f.write(f'd,{key},{value}\n')
-                f.close()
-            caltext = f'CONFIG: Complete.'
+            text.append(f'LAST CLICK: {mouse_mark} PIXELS')
+        text.append(f'CURRENT XY: {mouse_now} PIXELS')
 
-        # add caltext
-        draw.add_text(frame0,caltext,(cx)+100,(cy)+30,color='red')
-
-        # clear mouse
-        mouse_mark = None     
-
-    #-------------------------------
-    # auto mode
-    #-------------------------------
-    elif key_flags['auto']:
-        
-        mouse_mark = None
-
-        # auto text data
-        text.append('')
-        text.append(f'AUTO MODE')
-        text.append(f'UNITS: {unit_suffix}')
-        text.append(f'MIN PERCENT: {auto_percent:.2f}')
-        text.append(f'THRESHOLD: {auto_threshold}')
-        text.append(f'GAUSS BLUR: {auto_blur}')
-        
-        # gray frame
-        frame1 = cv2.cvtColor(frame0,cv2.COLOR_BGR2GRAY)
-
-        # blur frame
-        frame1 = cv2.GaussianBlur(frame1,(auto_blur,auto_blur),0)
-
-        # threshold frame n out of 255 (85 = 33%)
-        frame1 = cv2.threshold(frame1,auto_threshold,255,cv2.THRESH_BINARY)[1]
-
-        # invert
-        frame1 = ~frame1
-
-        # find contours on thresholded image
-        contours,nada = cv2.findContours(frame1,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-        
-        # small crosshairs (after getting frame1)
-        draw.crosshairs(frame0,5,weight=2,color='green')    
-    
-        # loop over the contours
-        for c in contours:
-            # contour data (from top left)
-            x1,y1,w,h = cv2.boundingRect(c)
-            x2,y2 = x1+w,y1+h
-            x3,y3 = x1+(w/2),y1+(h/2)
-
-            # percent area
-            percent = 100*w*h/area
+        #-------------------------------
+        # normalize mode
+        #-------------------------------
+        if key_flags['norms']:
+            # print
+            text.append('')
+            text.append(f'NORMILIZE MODE')
+            text.append(f'ALPHA (min): {norm_alpha}')
+            text.append(f'BETA (max): {norm_beta}')
             
-            # if the contour is too small, ignore it
-            if percent < auto_percent:
-                continue
-
-            # if the contour is too large, ignore it
-            elif percent > 60:
-                continue
-
-            # Check if the contour is circular
-            circ_check, radius, center = is_circle(c)
+        #-------------------------------
+        # config mode
+        #-------------------------------
+        if key_flags['config']:
+            # Your existing config mode code...
             
-            # convert to center, then distance
-            x1c,y1c = conv(x1-(cx),y1-(cy))
-            x2c,y2c = conv(x2-(cx),y2-(cy))
-            xlen = abs(x1c-x2c)
-            ylen = abs(y1c-y2c)
-            alen = 0
-            if max(xlen,ylen) > 0 and min(xlen,ylen)/max(xlen,ylen) >= 0.95:
-                alen = (xlen+ylen)/2              
-            carea = xlen*ylen
+            # quadrant crosshairs
+            draw.crosshairs(frame0,5,weight=2,color='red',invert=True)
 
-            # If it's a circle
-            if circ_check:
-                # Calculate diameter in measurement units
-                rc = conv(radius, 0)[0]  # Convert radius to real units
-                diameter = rc * 2
-                
-                # Draw circle and diameter
-                cv2.circle(frame0, center, radius, (0, 0, 255), 2)
-                cv2.line(frame0, 
-                        (center[0]-radius, center[1]), 
-                        (center[0]+radius, center[1]), 
-                        (0, 255, 0), 1)
-                
-                # Add diameter text
-                draw.add_text(frame0, f'⌀{diameter:.2f}{unit_suffix}', 
-                            center[0]+radius+10, center[1], 
-                            color='red')
-                
-                # Error calculation
-                if expected_length > 0:
-                    try:
-                        draw_2d_error_box(frame0, center[0]-140, center[1]+radius+40, 
-                                        expected_length, diameter, 
-                                        expected_width, diameter,
-                                        "Reference", "Measured")
-                    except Exception as e:
-                        debug_print(f"Circle error display failed: {e}")
+            # crosshairs aligned (rotated) to maximum distance 
+            draw.line(frame0,cx,cy, cx+cx, cy+cy,weight=1,color='red')
+            draw.line(frame0,cx,cy, cx+cy, cy-cx,weight=1,color='red')
+            draw.line(frame0,cx,cy,-cx+cx,-cy+cy,weight=1,color='red')
+            draw.line(frame0,cx,cy, cx-cy, cy+cx,weight=1,color='red')
 
-            # For non-circular objects
+            # mouse cursor lines (parallel to aligned crosshairs)
+            mx,my = mouse_raw
+            draw.line(frame0,mx,my,mx+dm,my+(dm*( cy/cx)),weight=1,color='green')
+            draw.line(frame0,mx,my,mx-dm,my-(dm*( cy/cx)),weight=1,color='green')
+            draw.line(frame0,mx,my,mx+dm,my+(dm*(-cx/cy)),weight=1,color='green')
+            draw.line(frame0,mx,my,mx-dm,my-(dm*(-cx/cy)),weight=1,color='green')
+        
+            # config text data
+            text.append('')
+            text.append(f'CONFIG MODE')
+
+            # start cal
+            if not cal_last:
+                cal_last = cal_base
+                caltext = f'CONFIG: Click on D = {cal_last}'
+
+            # continue cal
+            elif cal_last <= cal_range:
+                if mouse_mark:
+                    cal_update(*mouse_mark,cal_last)
+                    cal_last += cal_base
+                caltext = f'CONFIG: Click on D = {cal_last}'
+
+            # done
             else:
-                # Original rectangle drawing
-                draw.rect(frame0,x1,y1,x2,y2,weight=2,color='red')
-                draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
-                draw.add_text(frame0,f'Area: {carea:.2f}',x3,y2+8,center=True,top=True,color='red')
+                key_flags_clear()
+                cal_last == None
+                with open(calfile,'w') as f:
+                    data = list(cal.items())
+                    data.sort()
+                    for key,value in data:
+                        f.write(f'd,{key},{value}\n')
+                    f.close()
+                caltext = f'CONFIG: Complete.'
+
+            # add caltext
+            draw.add_text(frame0,caltext,(cx)+100,(cy)+30,color='red')
+
+            # clear mouse
+            mouse_mark = None     
+
+        #-------------------------------
+        # auto mode
+        #-------------------------------
+        elif key_flags['auto']:
+            # All existing auto mode code including:
+            # - Mouse mark reset, text data updates
+            # - Frame processing (gray, blur, threshold)
+            # - Contour finding and processing
+            # - Circle detection and rectangle drawing
+            
+            mouse_mark = None
+
+            # auto text data
+            text.append('')
+            text.append(f'AUTO MODE')
+            text.append(f'UNITS: {unit_suffix}')
+            text.append(f'MIN PERCENT: {auto_percent:.2f}')
+            text.append(f'THRESHOLD: {auto_threshold}')
+            text.append(f'GAUSS BLUR: {auto_blur}')
+            
+            # gray frame
+            frame1 = cv2.cvtColor(frame0,cv2.COLOR_BGR2GRAY)
+
+            # blur frame
+            frame1 = cv2.GaussianBlur(frame1,(auto_blur,auto_blur),0)
+
+            # threshold frame n out of 255 (85 = 33%)
+            frame1 = cv2.threshold(frame1,auto_threshold,255,cv2.THRESH_BINARY)[1]
+
+            # invert
+            frame1 = ~frame1
+
+            # find contours on thresholded image
+            contours,nada = cv2.findContours(frame1,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            
+            # small crosshairs (after getting frame1)
+            draw.crosshairs(frame0,5,weight=2,color='green')    
+        
+            # loop over the contours
+            for c in contours:
+                # Existing contour processing code...
+                # Including circle detection, measurements, etc.
                 
+                # contour data (from top left)
+                x1,y1,w,h = cv2.boundingRect(c)
+                x2,y2 = x1+w,y1+h
+                x3,y3 = x1+(w/2),y1+(h/2)
+
+                # percent area
+                percent = 100*w*h/area
+                
+                # if the contour is too small, ignore it
+                if percent < auto_percent:
+                    continue
+
+                # if the contour is too large, ignore it
+                elif percent > 60:
+                    continue
+
+                # Check if the contour is circular
+                circ_check, radius, center = is_circle(c)
+                
+                # convert to center, then distance
+                x1c,y1c = conv(x1-(cx),y1-(cy))
+                x2c,y2c = conv(x2-(cx),y2-(cy))
+                xlen = abs(x1c-x2c)
+                ylen = abs(y1c-y2c)
+                alen = 0
+                if max(xlen,ylen) > 0 and min(xlen,ylen)/max(xlen,ylen) >= 0.95:
+                    alen = (xlen+ylen)/2              
+                carea = xlen*ylen
+
+                # If it's a circle, draw circle and show diameter
+                if circ_check:
+                    # All existing circle processing code
+                    # ...
+                    rc = conv(radius, 0)[0]
+                    diameter = rc * 2
+                    
+                    cv2.circle(frame0, center, radius, (0, 0, 255), 2)
+                    cv2.line(frame0, 
+                            (center[0]-radius, center[1]), 
+                            (center[0]+radius, center[1]), 
+                            (0, 255, 0), 1)
+                    
+                    draw.add_text(frame0, f'⌀{diameter:.2f}{unit_suffix}', 
+                                center[0]+radius+10, center[1], 
+                                color='red')
+                    
+                    if expected_length > 0:
+                        try:
+                            draw_2d_error_box(frame0, center[0]-140, center[1]+radius+40, 
+                                            expected_length, diameter, 
+                                            expected_width, diameter,
+                                            "Reference", "Measured")
+                        except Exception as e:
+                            debug_print(f"Circle error display failed: {e}")
+                else:
+                    # All existing rectangle processing code
+                    # ...
+                    draw.rect(frame0,x1,y1,x2,y2,weight=2,color='red')
+                    draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
+                    draw.add_text(frame0,f'Area: {carea:.2f}',x3,y2+8,center=True,top=True,color='red')
+                    
+                    if alen:
+                        draw.add_text(frame0, f'Avg: {alen:.2f}', x3, y2+34, center=True, top=True, color='green')
+                        try:
+                            draw_2d_error_box(frame0, int(x1), int(y2)+60, 
+                                            expected_length, xlen, 
+                                            expected_width, ylen,
+                                            "Reference", "Measured")
+                        except Exception as e:
+                            debug_print(f"Rect error display failed: {e}")
+
+                    if x1 < width-x2:
+                        draw.add_text(frame0,f'{ylen:.2f}',x2+4,(y1+y2)/2,middle=True,color='red')
+                    else:
+                        draw.add_text(frame0,f'{ylen:.2f}',x1-4,(y1+y2)/2,middle=True,right=True,color='red')
+
+        #-------------------------------
+        # dimension mode
+        #-------------------------------
+        else:
+            # All existing dimension mode code
+            # Including crosshairs, manual drawing, etc.
+            
+            # small crosshairs
+            draw.crosshairs(frame0,5,weight=2,color='green')    
+
+            # mouse cursor lines
+            draw.vline(frame0,mouse_raw[0],weight=1,color='green')
+            draw.hline(frame0,mouse_raw[1],weight=1,color='green')
+           
+            # Manual draw
+            if mouse_mark:
+                # All existing manual drawing code
+                # ...
+                
+                # locations
+                x1,y1 = mouse_mark
+                x2,y2 = mouse_now
+
+                # convert to distance
+                x1c,y1c = conv(x1,y1)
+                x2c,y2c = conv(x2,y2)
+                xlen = abs(x1c-x2c)
+                ylen = abs(y1c-y2c)
+                llen = hypot(xlen,ylen)
+                alen = 0
+                if max(xlen,ylen) > 0 and min(xlen,ylen)/max(xlen,ylen) >= 0.95:
+                    alen = (xlen+ylen)/2              
+                carea = xlen*ylen
+
+                # print distances
+                text.append('')
+                text.append(f'X LEN: {xlen:.2f}{unit_suffix}')
+                text.append(f'Y LEN: {ylen:.2f}{unit_suffix}')
+                text.append(f'L LEN: {llen:.2f}{unit_suffix}')
+
+                # convert to plot locations
+                x1 += cx
+                x2 += cx
+                y1 *= -1
+                y2 *= -1
+                y1 += cy
+                y2 += cy
+                x3 = x1+((x2-x1)/2)
+                y3 = max(y1,y2)
+
+                # line weight
+                weight = 1
+                if key_flags['lock']:
+                    weight = 2
+
+                # plot
+                draw.rect(frame0,x1,y1,x2,y2,weight=weight,color='red')
+                draw.line(frame0,x1,y1,x2,y2,weight=weight,color='green')
+
+                # add dimensions
+                draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
+                draw.add_text(frame0,f'Area: {carea:.2f}',x3,y3+8,center=True,top=True,color='red')
                 if alen:
-                    draw.add_text(frame0, f'Avg: {alen:.2f}', x3, y2+34, center=True, top=True, color='green')
-                    try:
-                        draw_2d_error_box(frame0, int(x1), int(y2)+60, 
+                    draw.add_text(frame0,f'Avg: {alen:.2f}',x3,y3+34,center=True,top=True,color='green')           
+                    if key_flags['lock']:
+                        draw_2d_error_box(frame0, 10, y3+50, 
                                         expected_length, xlen, 
                                         expected_width, ylen,
                                         "Reference", "Measured")
-                    except Exception as e:
-                        debug_print(f"Rect error display failed: {e}")
-
-                if x1 < width-x2:
-                    draw.add_text(frame0,f'{ylen:.2f}',x2+4,(y1+y2)/2,middle=True,color='red')
+                if x2 <= x1:
+                    draw.add_text(frame0,f'{ylen:.2f}',x1+4,(y1+y2)/2,middle=True,color='red')
+                    draw.add_text(frame0,f'{llen:.2f}',x2-4,y2-4,right=True,color='green')
                 else:
                     draw.add_text(frame0,f'{ylen:.2f}',x1-4,(y1+y2)/2,middle=True,right=True,color='red')
+                    draw.add_text(frame0,f'{llen:.2f}',x2+8,y2-4,color='green')
+
+        # add usage key
+        text.append('')
+        text.append(f'Q = QUIT')
+        text.append(f'R = ROTATE')
+        text.append(f'N = NORMALIZE')
+        text.append(f'A = AUTO-MODE')
+        if key_flags['auto']:
+            text.append(f'P = MIN-PERCENT')
+            text.append(f'T = THRESHOLD')
+            text.append(f'T = GAUSS BLUR')
+        text.append(f'C = CONFIG-MODE')
+
+        # draw top-left text block
+        draw.add_text_top_left(frame0,text)
+
+        # display
+        cv2.imshow(framename,frame0)
+
+        # key delay and action
+        key = cv2.waitKey(1) & 0xFF
+
+        # esc ==  27 == quit
+        # q   == 113 == quit
+        if key in (27,113):
+            break
+
+        # key data
+        elif key not in (-1,255):
+            key_event(key)
 
     #-------------------------------
-    # dimension mode
+    # kill sequence
     #-------------------------------
-    else:
 
-        # small crosshairs
-        draw.crosshairs(frame0,5,weight=2,color='green')    
+    # Add before camera.stop()
+    try:
+        import error_logger
+        print("Saving measurement logs...")
+        error_logger.save_log()
+    except Exception as e:
+        print(f"Error saving logs: {e}")
 
-        # mouse cursor lines
-        draw.vline(frame0,mouse_raw[0],weight=1,color='green')
-        draw.hline(frame0,mouse_raw[1],weight=1,color='green')
-       
-        # Manual draw
-        if mouse_mark:
+    # close camera thread
+    camera.stop()
 
-            # locations
-            x1,y1 = mouse_mark
-            x2,y2 = mouse_now
+    # close all windows
+    cv2.destroyAllWindows()
 
-            # convert to distance
-            x1c,y1c = conv(x1,y1)
-            x2c,y2c = conv(x2,y2)
-            xlen = abs(x1c-x2c)
-            ylen = abs(y1c-y2c)
-            llen = hypot(xlen,ylen)
-            alen = 0
-            if max(xlen,ylen) > 0 and min(xlen,ylen)/max(xlen,ylen) >= 0.95:
-                alen = (xlen+ylen)/2              
-            carea = xlen*ylen
 
-            # print distances
-            text.append('')
-            text.append(f'X LEN: {xlen:.2f}{unit_suffix}')
-            text.append(f'Y LEN: {ylen:.2f}{unit_suffix}')
-            text.append(f'L LEN: {llen:.2f}{unit_suffix}')
-
-            # convert to plot locations
-            x1 += cx
-            x2 += cx
-            y1 *= -1
-            y2 *= -1
-            y1 += cy
-            y2 += cy
-            x3 = x1+((x2-x1)/2)
-            y3 = max(y1,y2)
-
-            # line weight
-            weight = 1
-            if key_flags['lock']:
-                weight = 2
-
-            # plot
-            draw.rect(frame0,x1,y1,x2,y2,weight=weight,color='red')
-            draw.line(frame0,x1,y1,x2,y2,weight=weight,color='green')
-
-            # add dimensions
-            draw.add_text(frame0,f'{xlen:.2f}',x1-((x1-x2)/2),min(y1,y2)-8,center=True,color='red')
-            draw.add_text(frame0,f'Area: {carea:.2f}',x3,y3+8,center=True,top=True,color='red')
-            if alen:
-                draw.add_text(frame0,f'Avg: {alen:.2f}',x3,y3+34,center=True,top=True,color='green')           
-                if key_flags['lock']:
-                    draw_2d_error_box(frame0, 10, y3+50, 
-                                    expected_length, xlen, 
-                                    expected_width, ylen,
-                                    "Reference", "Measured")
-            if x2 <= x1:
-                draw.add_text(frame0,f'{ylen:.2f}',x1+4,(y1+y2)/2,middle=True,color='red')
-                draw.add_text(frame0,f'{llen:.2f}',x2-4,y2-4,right=True,color='green')
-            else:
-                draw.add_text(frame0,f'{ylen:.2f}',x1-4,(y1+y2)/2,middle=True,right=True,color='red')
-                draw.add_text(frame0,f'{llen:.2f}',x2+8,y2-4,color='green')
-
-    # add usage key
-    text.append('')
-    text.append(f'Q = QUIT')
-    text.append(f'R = ROTATE')
-    text.append(f'N = NORMALIZE')
-    text.append(f'A = AUTO-MODE')
-    if key_flags['auto']:
-        text.append(f'P = MIN-PERCENT')
-        text.append(f'T = THRESHOLD')
-        text.append(f'T = GAUSS BLUR')
-    text.append(f'C = CONFIG-MODE')
-
-    # draw top-left text block
-    draw.add_text_top_left(frame0,text)
-
-    # display
-    cv2.imshow(framename,frame0)
-
-    # key delay and action
-    key = cv2.waitKey(1) & 0xFF
-
-    # esc ==  27 == quit
-    # q   == 113 == quit
-    if key in (27,113):
-        break
-
-    # key data
-    #elif key != 255:
-    elif key not in (-1,255):
-        key_event(key)
-
-#-------------------------------
-# kill sequence
-#-------------------------------
-
-# close camera thread
-camera.stop()
-
-# close all windows
-cv2.destroyAllWindows()
-
-# done
-exit()
-
-#-------------------------------
-# end
-#-------------------------------
+# Entry point for the application
+if __name__ == "__main__":
+    main()
+    # done
